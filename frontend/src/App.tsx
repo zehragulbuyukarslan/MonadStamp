@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { ScanScreen } from "./components/ScanScreen";
 import { SignScreen, MintResult } from "./components/SignScreen";
 import { SuccessScreen } from "./components/SuccessScreen";
@@ -11,10 +11,10 @@ function App() {
   const [event, setEvent] = useState<EventPayload | null>(null);
   const [mintResult, setMintResult] = useState<MintResult | null>(null);
 
-  function handleScan(payload: EventPayload) {
+  const handleScan = useCallback((payload: EventPayload) => {
     setEvent(payload);
     setStep("sign");
-  }
+  }, []);
 
   function handleSuccess(result: MintResult) {
     setMintResult(result);

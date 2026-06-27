@@ -67,7 +67,7 @@ export default function Dashboard() {
 
     async function loadHistory() {
       const latest = await provider.getBlockNumber();
-      const fromBlock = Math.max(0, latest - 100_000);
+      const fromBlock = Math.max(0, latest - 100);
       const logs = (await contract.queryFilter(
         contract.filters.StampMinted(),
         fromBlock,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Html5Qrcode } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeScannerState } from "html5-qrcode";
 import { parseEventQr, EventPayload } from "../lib/qr";
 
 interface ScanScreenProps {
@@ -50,8 +50,24 @@ export function ScanScreen({ onScan }: ScanScreenProps) {
       });
 
     return () => {
-      scannerRef.current?.stop().catch(() => undefined);
-      scannerRef.current?.clear();
+      const scanner = scannerRef.current;
+      scannerRef.current = null;
+      if (!scanner) return;
+
+      void (async () => {
+        try {
+          if (scanner.getState() !== Html5QrcodeScannerState.NOT_STARTED) {
+            await scanner.stop();
+          }
+        } catch {
+          // Scanner never started or was already stopped (e.g. StrictMode remount).
+        }
+        try {
+          scanner.clear();
+        } catch {
+          // Element may already be removed from the DOM.
+        }
+      })();
     };
   }, [manualInput, onScan]);
 
