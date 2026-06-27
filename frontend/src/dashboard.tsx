@@ -65,14 +65,47 @@ export default function Dashboard() {
       };
     }
 
-    async function loadHistory() {
+    const HISTORY_BLOCKS = 2000;
+    const CHUNK_SIZE = 1000;
+    const POLL_INTERVAL_MS = 3000;
+    let lastPolledBlock = 0;
+
+    async function getStampMintedLogs(
+      fromBlock: number,
+      toBlock: number
+    ): Promise<EventLog[]> {
+      if (fromBlock > toBlock) return [];
+
+      const filter = contract.filters.StampMinted();
+      const chunks: Array<{ from: number; to: number }> = [];
+      for (let start = fromBlock; start <= toBlock; start += CHUNK_SIZE) {
+        chunks.push({
+          from: start,
+          to: Math.min(start + CHUNK_SIZE - 1, toBlock),
+        });
+      }
+
+      const results: EventLog[] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const { from, to } = chunks[i];
+        const logs = await provider.getLogs({
+          ...filter,
+          fromBlock: from,
+          toBlock: to,
+        });
+        results.push(...(logs as EventLog[]));
+        if (i < chunks.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+
+      return results;
+    }
+
+    async function loadHistory(): Promise<number> {
       const latest = await provider.getBlockNumber();
-      const fromBlock = Math.max(0, latest - 100);
-      const logs = (await contract.queryFilter(
-        contract.filters.StampMinted(),
-        fromBlock,
-        latest
-      )) as EventLog[];
+      const fromBlock = Math.max(0, latest - HISTORY_BLOCKS);
+      const logs = await getStampMintedLogs(fromBlock, latest);
 
       const feedItems = await Promise.all(logs.map(logToFeedItem));
       const valid = feedItems.filter((item): item is FeedItem => item !== null);
@@ -83,11 +116,40 @@ export default function Dashboard() {
         setItems(valid);
         setStatus("live");
       }
+
+      return latest;
+    }
+
+    async function pollNewLogs() {
+      if (!mounted) return;
+
+      try {
+        const latest = await provider.getBlockNumber();
+        if (latest <= lastPolledBlock) return;
+
+        const logs = await getStampMintedLogs(lastPolledBlock + 1, latest);
+        lastPolledBlock = latest;
+
+        const feedItems = await Promise.all(logs.map(logToFeedItem));
+        const valid = feedItems.filter((item): item is FeedItem => item !== null);
+        if (valid.length === 0) return;
+
+        setItems((prev) => {
+          const existingIds = new Set(prev.map((item) => item.id));
+          const newItems = valid.filter((item) => !existingIds.has(item.id));
+          if (newItems.length === 0) return prev;
+          const merged = [...newItems, ...prev];
+          merged.sort((a, b) => b.blockNumber - a.blockNumber);
+          return merged;
+        });
+      } catch {
+        // keep polling on transient RPC errors
+      }
     }
 
     async function bootstrap() {
       try {
-        await loadHistory();
+        lastPolledBlock = await loadHistory();
       } catch (err) {
         if (!mounted) return;
         setStatus("error");
@@ -97,38 +159,11 @@ export default function Dashboard() {
 
     bootstrap();
 
-    const onStampMinted = async (
-      eventId: string,
-      recipient: string,
-      _tokenId: bigint,
-      event: { log: EventLog }
-    ) => {
-      if (!mounted) return;
-
-      const eventName = await resolveEventName(eventId);
-      const blockNumber = event.log.blockNumber;
-      const txHash = event.log.transactionHash;
-      const id = `${txHash}-${event.log.index}`;
-
-      const entry: FeedItem = {
-        id,
-        recipient,
-        eventName,
-        blockNumber,
-        txHash,
-      };
-
-      setItems((prev) => {
-        if (prev.some((item) => item.id === id)) return prev;
-        return [entry, ...prev];
-      });
-    };
-
-    contract.on("StampMinted", onStampMinted);
+    const pollIntervalId = setInterval(pollNewLogs, POLL_INTERVAL_MS);
 
     return () => {
       mounted = false;
-      contract.off("StampMinted", onStampMinted);
+      clearInterval(pollIntervalId);
     };
   }, []);
 
