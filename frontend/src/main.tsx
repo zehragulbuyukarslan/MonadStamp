@@ -5,6 +5,9 @@ import App from "./App";
 import Admin from "./admin";
 import Dashboard from "./dashboard";
 import "./index.css";
+import { startWalletDiscovery } from "./lib/wallet";
+
+startWalletDiscovery();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

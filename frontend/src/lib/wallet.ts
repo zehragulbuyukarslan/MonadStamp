@@ -10,15 +10,66 @@ declare global {
   }
 }
 
+let eip6963Provider: EthereumProvider | null = null;
+let discoveryStarted = false;
+
 function normalizeChainId(chainId: string): string {
   return chainId.toLowerCase();
 }
 
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]);
+}
+
+export function startWalletDiscovery(): void {
+  if (discoveryStarted || typeof window === "undefined") {
+    return;
+  }
+  discoveryStarted = true;
+
+  window.addEventListener("eip6963:announceProvider", (event: Event) => {
+    const detail = (event as CustomEvent<{
+      provider: EthereumProvider;
+      info: { name: string; rdns: string };
+    }>).detail;
+
+    if (detail.info.rdns === "io.metamask") {
+      eip6963Provider = detail.provider;
+      return;
+    }
+    if (!eip6963Provider) {
+      eip6963Provider = detail.provider;
+    }
+  });
+
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+}
+
+export function isWalletInstalled(): boolean {
+  if (eip6963Provider) {
+    return true;
+  }
+  return typeof window !== "undefined" && !!window.ethereum;
+}
+
 export function getEthereum(): EthereumProvider {
+  if (eip6963Provider) {
+    return eip6963Provider;
+  }
+
   const { ethereum } = window;
   if (!ethereum) {
     throw new Error(
-      "No wallet found. Install MetaMask and refresh the page."
+      "MetaMask bulunamadı. MetaMask eklentisini kurun ve sayfayı yenileyin."
     );
   }
 
@@ -32,6 +83,21 @@ export function getEthereum(): EthereumProvider {
 
 export function getProvider(): BrowserProvider {
   return new BrowserProvider(getEthereum());
+}
+
+export async function getConnectedAddress(): Promise<string | null> {
+  if (!isWalletInstalled()) {
+    return null;
+  }
+
+  try {
+    const accounts = (await getEthereum().request({
+      method: "eth_accounts",
+    })) as string[];
+    return accounts[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function ensureMonadNetwork(): Promise<void> {
@@ -53,7 +119,9 @@ export async function ensureMonadNetwork(): Promise<void> {
   } catch (error) {
     const switchError = error as { code?: number; message?: string };
     if (switchError.code === 4001) {
-      throw new Error("Network switch rejected. Approve Monad Testnet in your wallet.");
+      throw new Error(
+        "Ağ değişikliği reddedildi. MetaMask'ta Monad Testnet'i onaylayın."
+      );
     }
     if (switchError.code === 4902) {
       await ethereum.request({
@@ -63,27 +131,30 @@ export async function ensureMonadNetwork(): Promise<void> {
       return;
     }
     throw new Error(
-      switchError.message ?? "Failed to switch to Monad Testnet"
+      switchError.message ?? "Monad Testnet'e geçilemedi"
     );
   }
 }
 
 export async function connectWallet(): Promise<string> {
   const ethereum = getEthereum();
-  await ensureMonadNetwork();
 
-  const accounts = (await ethereum.request({
-    method: "eth_requestAccounts",
-  })) as string[];
+  const accounts = await withTimeout(
+    ethereum.request({ method: "eth_requestAccounts" }) as Promise<string[]>,
+    120_000,
+    "MetaMask yanıt vermedi. Eklenti simgesine tıklayıp bağlantıyı onaylayın."
+  );
 
   if (!accounts[0]) {
-    throw new Error("No account selected");
+    throw new Error("Hesap seçilmedi");
   }
+
+  await ensureMonadNetwork();
 
   const provider = getProvider();
   const network = await provider.getNetwork();
   if (Number(network.chainId) !== CHAIN_ID) {
-    throw new Error("Please switch to Monad Testnet in your wallet.");
+    throw new Error("Lütfen MetaMask'ta Monad Testnet'e geçin.");
   }
 
   return accounts[0];
@@ -100,7 +171,7 @@ export async function signMintStamp(
   const address = await signer.getAddress();
 
   if (address.toLowerCase() !== recipient.toLowerCase()) {
-    throw new Error("Connected wallet does not match recipient");
+    throw new Error("Bağlı cüzdan adresi eşleşmiyor");
   }
 
   return signer.signTypedData(

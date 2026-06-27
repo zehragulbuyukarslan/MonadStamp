@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { EventPayload } from "../lib/qr";
-import { connectWallet, signMintStamp } from "../lib/wallet";
+import {
+  connectWallet,
+  getConnectedAddress,
+  isWalletInstalled,
+  signMintStamp,
+  startWalletDiscovery,
+} from "../lib/wallet";
 import { checkRelayHealth, requestMint } from "../lib/relay";
 
 export interface MintResult {
@@ -20,50 +26,102 @@ function shortAddress(address: string): string {
 
 export function SignScreen({ event, onSuccess, onBack }: SignScreenProps) {
   const [wallet, setWallet] = useState<string | null>(null);
+  const [walletInstalled, setWalletInstalled] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [minting, setMinting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [relayOk, setRelayOk] = useState<boolean | null>(null);
+  const [relayWarning, setRelayWarning] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    startWalletDiscovery();
 
+    const detectWallet = () => {
+      setWalletInstalled(isWalletInstalled());
+    };
+    detectWallet();
+
+    const redetectTimer = setTimeout(detectWallet, 500);
+
+    getConnectedAddress()
+      .then((address) => {
+        if (address) {
+          setWallet(address);
+        }
+      })
+      .catch(() => undefined);
+
+    let cancelled = false;
     checkRelayHealth()
       .then((health) => {
         if (cancelled) return;
-        if (health.ok) {
-          setRelayOk(true);
-          return;
+        if (!health.ok) {
+          setRelayWarning(
+            health.error ??
+              "Relay sunucusu hazır değil. Mint için Vercel ortam değişkenleri gerekli."
+          );
         }
-        setRelayOk(false);
-        setError(health.error ?? "Relay server is not configured");
       })
       .catch(() => {
         if (cancelled) return;
-        setRelayOk(false);
-        setError("Cannot reach relay server. Minting will not work.");
+        setRelayWarning("Relay sunucusuna ulaşılamıyor.");
       });
+
+    const ethereum = window.ethereum as
+      | (typeof window.ethereum & {
+          on?: (event: string, handler: (accounts: string[]) => void) => void;
+          removeListener?: (
+            event: string,
+            handler: (accounts: string[]) => void
+          ) => void;
+        })
+      | undefined;
+    if (!ethereum) {
+      return () => {
+        cancelled = true;
+        clearTimeout(redetectTimer);
+      };
+    }
+
+    const onAccountsChanged = (accounts: string[]) => {
+      setWallet(accounts[0] ?? null);
+      setError(null);
+    };
+
+    ethereum.on?.("accountsChanged", onAccountsChanged);
 
     return () => {
       cancelled = true;
+      clearTimeout(redetectTimer);
+      ethereum.removeListener?.("accountsChanged", onAccountsChanged);
     };
   }, []);
 
   async function handleConnect() {
+    if (!isWalletInstalled()) {
+      setError(
+        "MetaMask bulunamadı. Tarayıcıda MetaMask eklentisini kurun, etkinleştirin ve sayfayı yenileyin."
+      );
+      return;
+    }
+
     try {
       setConnecting(true);
       setError(null);
-      setStatus("Approve the connection in your wallet (check the MetaMask popup)…");
+      setStatus(
+        "MetaMask penceresini onaylayın (tarayıcı adres çubuğunun yanındaki tilki simgesine bakın)…"
+      );
       const address = await connectWallet();
       setWallet(address);
       setStatus(null);
     } catch (err) {
       setStatus(null);
-      if (err instanceof Error && err.message.includes("rejected")) {
-        setError("Connection rejected. Click Connect Wallet and approve in MetaMask.");
+      const message =
+        err instanceof Error ? err.message : "Cüzdan bağlantısı başarısız";
+      if (message.toLowerCase().includes("reject")) {
+        setError("Bağlantı reddedildi. Connect Wallet'a tekrar tıklayıp onaylayın.");
       } else {
-        setError(err instanceof Error ? err.message : "Wallet connection failed");
+        setError(message);
       }
     } finally {
       setConnecting(false);
@@ -72,19 +130,19 @@ export function SignScreen({ event, onSuccess, onBack }: SignScreenProps) {
 
   async function handleMint() {
     if (!wallet) {
-      setError("Connect your wallet first.");
+      setError("Önce cüzdanınızı bağlayın.");
       return;
     }
 
     try {
       setMinting(true);
       setError(null);
-      setStatus("Approve the signature request in your wallet…");
+      setStatus("MetaMask'ta imza isteğini onaylayın…");
 
       const timestamp = Math.floor(Date.now() / 1000);
       const signature = await signMintStamp(wallet, event.eventId, timestamp);
 
-      setStatus("Submitting mint transaction via relay…");
+      setStatus("Mint işlemi relay üzerinden gönderiliyor…");
       const result = await requestMint({
         recipient: wallet,
         eventId: event.eventId,
@@ -93,13 +151,13 @@ export function SignScreen({ event, onSuccess, onBack }: SignScreenProps) {
       });
 
       if (!result.txHash || result.blockNumber === undefined) {
-        throw new Error("Relay did not return transaction details");
+        throw new Error("Relay işlem detayı döndürmedi");
       }
 
       onSuccess({ txHash: result.txHash, blockNumber: result.blockNumber });
     } catch (err) {
       setStatus(null);
-      setError(err instanceof Error ? err.message : "Mint failed");
+      setError(err instanceof Error ? err.message : "Mint başarısız");
     } finally {
       setMinting(false);
     }
@@ -137,6 +195,21 @@ export function SignScreen({ event, onSuccess, onBack }: SignScreenProps) {
           <p className="mt-1 break-all font-mono text-sm">{event.eventId}</p>
         </div>
 
+        {!walletInstalled && (
+          <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            MetaMask algılanmadı.{" "}
+            <a
+              href="https://metamask.io/download/"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              MetaMask kurun
+            </a>{" "}
+            ve sayfayı yenileyin.
+          </div>
+        )}
+
         {wallet && (
           <div className="mt-4 rounded-2xl border border-monad-purple/30 bg-monad-purple/10 p-4">
             <p className="text-xs uppercase tracking-wide text-monad-glow">
@@ -160,12 +233,9 @@ export function SignScreen({ event, onSuccess, onBack }: SignScreenProps) {
           </p>
         )}
 
-        {relayOk === false && (
+        {relayWarning && (
           <p className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            Relay is not ready on the server. The organizer must set{" "}
-            <span className="font-mono">RELAYER_PRIVATE_KEY</span> and{" "}
-            <span className="font-mono">CONTRACT_ADDRESS</span> in Vercel
-            environment variables.
+            {relayWarning}
           </p>
         )}
 
@@ -173,18 +243,18 @@ export function SignScreen({ event, onSuccess, onBack }: SignScreenProps) {
           {!wallet && (
             <button
               type="button"
-              onClick={handleConnect}
-              disabled={busy}
-              className="w-full rounded-xl border border-white/20 py-3 font-semibold transition hover:bg-white/5 disabled:opacity-50"
+              onClick={() => void handleConnect()}
+              disabled={connecting}
+              className="w-full rounded-xl border border-white/20 py-3 font-semibold transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {connecting ? "Connecting…" : "Connect Wallet"}
+              {connecting ? "Bağlanıyor…" : "Connect Wallet"}
             </button>
           )}
           <button
             type="button"
-            onClick={handleMint}
-            disabled={busy || !wallet || relayOk === false}
-            className="w-full rounded-xl bg-monad-purple py-4 text-lg font-bold shadow-lg shadow-monad-purple/30 transition hover:bg-monad-purple/90 disabled:opacity-50"
+            onClick={() => void handleMint()}
+            disabled={minting || !wallet}
+            className="w-full rounded-xl bg-monad-purple py-4 text-lg font-bold shadow-lg shadow-monad-purple/30 transition hover:bg-monad-purple/90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {minting ? "Minting…" : "Mint your stamp"}
           </button>
