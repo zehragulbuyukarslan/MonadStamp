@@ -34,7 +34,7 @@ export default function Dashboard() {
       if (cached) return cached;
 
       try {
-        const info = await contract.events(eventId);
+        const info = await contract.getFunction("events")(eventId);
         const name =
           typeof info.name === "string" && info.name.length > 0
             ? info.name
@@ -46,27 +46,21 @@ export default function Dashboard() {
       }
     }
 
-    async function logToFeedItem(log: EventLog): Promise<FeedItem | null> {
-      const parsed = contract.interface.parseLog({
-        topics: log.topics as string[],
-        data: log.data,
-      });
-      if (!parsed || parsed.name !== "StampMinted") return null;
-
-      const eventId = parsed.args.eventId as string;
-      const recipient = parsed.args.recipient as string;
+    async function logToFeedItem(event: EventLog): Promise<FeedItem> {
+      const eventId = event.args.eventId as string;
+      const recipient = event.args.recipient as string;
 
       return {
-        id: `${log.transactionHash}-${log.index}`,
+        id: `${event.transactionHash}-${event.index}`,
         recipient,
         eventName: await resolveEventName(eventId),
-        blockNumber: log.blockNumber,
-        txHash: log.transactionHash,
+        blockNumber: event.blockNumber,
+        txHash: event.transactionHash,
       };
     }
 
-    const HISTORY_BLOCKS = 2000;
-    const CHUNK_SIZE = 1000;
+    const HISTORY_BLOCKS = 5000;
+    const CHUNK_SIZE = 100;
     const POLL_INTERVAL_MS = 3000;
     let lastPolledBlock = 0;
 
@@ -88,12 +82,8 @@ export default function Dashboard() {
       const results: EventLog[] = [];
       for (let i = 0; i < chunks.length; i++) {
         const { from, to } = chunks[i];
-        const logs = await provider.getLogs({
-          ...filter,
-          fromBlock: from,
-          toBlock: to,
-        });
-        results.push(...(logs as EventLog[]));
+        const events = await contract.queryFilter(filter, from, to);
+        results.push(...(events as EventLog[]));
         if (i < chunks.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
@@ -108,12 +98,11 @@ export default function Dashboard() {
       const logs = await getStampMintedLogs(fromBlock, latest);
 
       const feedItems = await Promise.all(logs.map(logToFeedItem));
-      const valid = feedItems.filter((item): item is FeedItem => item !== null);
 
-      valid.sort((a, b) => b.blockNumber - a.blockNumber);
+      feedItems.sort((a, b) => b.blockNumber - a.blockNumber);
 
       if (mounted) {
-        setItems(valid);
+        setItems(feedItems);
         setStatus("live");
       }
 
@@ -131,12 +120,11 @@ export default function Dashboard() {
         lastPolledBlock = latest;
 
         const feedItems = await Promise.all(logs.map(logToFeedItem));
-        const valid = feedItems.filter((item): item is FeedItem => item !== null);
-        if (valid.length === 0) return;
+        if (feedItems.length === 0) return;
 
         setItems((prev) => {
           const existingIds = new Set(prev.map((item) => item.id));
-          const newItems = valid.filter((item) => !existingIds.has(item.id));
+          const newItems = feedItems.filter((item) => !existingIds.has(item.id));
           if (newItems.length === 0) return prev;
           const merged = [...newItems, ...prev];
           merged.sort((a, b) => b.blockNumber - a.blockNumber);
