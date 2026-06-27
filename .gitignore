@@ -6,3 +6,4 @@ dist/
 .env
 deployments/
 .vercel
+.env*
