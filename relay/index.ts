@@ -13,11 +13,12 @@ dotenv.config();
 const DEFAULT_PORT = 3001;
 
 async function main() {
-  await getRelayContext();
-
   const app = express();
   app.use(cors());
   app.use(express.json());
+
+  app.options("/health", (_req, res) => res.sendStatus(204));
+  app.options("/mint", (_req, res) => res.sendStatus(204));
 
   app.get("/health", async (_req, res) => {
     try {

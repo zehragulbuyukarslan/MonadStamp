@@ -82,7 +82,7 @@ async function main() {
     // Step 1: Admin QR
     try {
       await page.goto(`${FRONTEND}/admin`, { waitUntil: "networkidle" });
-      await page.fill('input[placeholder="monad-blitz-ankara"]', EVENT_ID_STR);
+      await page.fill('input[placeholder="monad-blitz-ankara-2026"]', EVENT_ID_STR);
       await page.fill('input[placeholder="Monad Blitz Ankara"]', EVENT_NAME);
       await page.click('button:has-text("Generate QR Code")');
       await page.waitForSelector("img[alt*='QR code']");
@@ -170,7 +170,7 @@ async function main() {
       txHash = mintBody.txHash;
 
       await mobilePage.waitForSelector("text=You're checked in!", { timeout: 60000 });
-      const successTx = await mobilePage.locator('a[href*="monadexplorer"]').first().getAttribute("href");
+      const successTx = await mobilePage.locator('a[href*="/tx/"]').first().getAttribute("href");
       if (!successTx?.includes(txHash)) {
         throw new Error(`Success screen tx mismatch: ${successTx} vs ${txHash}`);
       }

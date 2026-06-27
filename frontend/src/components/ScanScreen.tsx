@@ -11,7 +11,7 @@ export function ScanScreen({ onScan }: ScanScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [manualInput, setManualInput] = useState(false);
   const [manualJson, setManualJson] = useState(
-    '{"eventId":"demo-event","eventName":"Monad Blitz Ankara"}'
+    '{"eventId":"monad-blitz-ankara-2026","eventName":"Monad Blitz Ankara"}'
   );
 
   useEffect(() => {

@@ -2,6 +2,10 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getHealthResponse } from "../relay/relay";
 
 export default async function handler(_req: VercelRequest, res: VercelResponse) {
+  if (_req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   if (_req.method !== "GET") {
     res.setHeader("Allow", "GET");
     return res.status(405).json({ success: false, error: "Method not allowed" });

@@ -2,6 +2,10 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { MintRequestBody, processMint } from "../relay/relay";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ success: false, error: "Method not allowed" });

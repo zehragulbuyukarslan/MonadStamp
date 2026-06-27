@@ -47,7 +47,15 @@ export async function checkRelayHealth(): Promise<RelayHealthResponse> {
   const response = await fetchWithTimeout(`${RELAY_URL}/health`, {
     method: "GET",
   });
-  return (await response.json()) as RelayHealthResponse;
+
+  const data = (await response.json()) as RelayHealthResponse;
+  if (!response.ok) {
+    return {
+      ok: false,
+      error: data.error ?? `Relay health check failed (${response.status})`,
+    };
+  }
+  return data;
 }
 
 export async function requestMint(

@@ -35,9 +35,8 @@ async function main() {
   const contractAddress = loadContractAddress();
   const [owner] = await ethers.getSigners();
 
-  const eventId = ethers.keccak256(
-    ethers.toUtf8Bytes("monad-blitz-ankara-2026")
-  );
+  const eventIdString = "monad-blitz-ankara-2026";
+  const eventId = ethers.id(eventIdString);
   const name = "Monad Blitz Ankara";
   const now = Math.floor(Date.now() / 1000);
   const startTime = now - 600;
@@ -56,8 +55,9 @@ async function main() {
 
   const receipt = await tx.wait();
   console.log("Event created in block:", receipt?.blockNumber);
-  console.log("\n--- Use this eventId for frontend and admin QR ---");
-  console.log(eventId);
+  console.log("\n--- Use this eventId string in admin QR / frontend ---");
+  console.log(eventIdString);
+  console.log("bytes32:", eventId);
 }
 
 main().catch((error) => {

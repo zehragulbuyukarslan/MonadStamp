@@ -4,7 +4,7 @@ import QRCode from "qrcode";
 import { buildEventQrPayload } from "./lib/qr";
 
 export default function Admin() {
-  const [eventId, setEventId] = useState("monad-blitz-ankara");
+  const [eventId, setEventId] = useState("monad-blitz-ankara-2026");
   const [eventName, setEventName] = useState("Monad Blitz Ankara");
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [payload, setPayload] = useState("");
@@ -59,7 +59,7 @@ export default function Admin() {
             type="text"
             value={eventId}
             onChange={(e) => setEventId(e.target.value)}
-            placeholder="monad-blitz-ankara"
+            placeholder="monad-blitz-ankara-2026"
             className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 outline-none focus:border-monad-purple"
           />
         </div>

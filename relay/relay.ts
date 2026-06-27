@@ -11,6 +11,81 @@ import {
 
 const TIMESTAMP_WINDOW_SEC = 5 * 60;
 const DEFAULT_RPC = "https://testnet-rpc.monad.xyz";
+const RPC_RETRY_ATTEMPTS = 4;
+const RPC_RETRY_DELAY_MS = 750;
+
+async function withRpcRetry<T>(
+  operation: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= RPC_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const isRateLimited =
+        error instanceof Error &&
+        (error.message.includes("requests limited") ||
+          (error as { info?: { error?: { code?: number } } }).info?.error
+            ?.code === -32011);
+
+      if (!isRateLimited || attempt === RPC_RETRY_ATTEMPTS) {
+        throw error;
+      }
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, RPC_RETRY_DELAY_MS * attempt)
+      );
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`${operation} failed after ${RPC_RETRY_ATTEMPTS} attempts`);
+}
+
+function formatRpcError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "Monad RPC is temporarily unavailable. Try again shortly.";
+  }
+
+  const text = error.message;
+  if (text.includes("requests limited") || text.includes("CALL_EXCEPTION")) {
+    return "Monad RPC is temporarily unavailable. Try again shortly.";
+  }
+
+  return text;
+}
+
+const CONTRACT_ERROR_MESSAGES: Record<string, string> = {
+  EventNotFound: "Event not found on chain. Ask the organizer for a valid QR code.",
+  EventNotActive: "Event check-in window is closed.",
+  AlreadyClaimed: "Stamp already claimed for this event.",
+  NotRelayer: "Relay is not authorized for this contract.",
+};
+
+function formatContractError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "Mint transaction failed";
+  }
+
+  const err = error as Error & { shortMessage?: string; reason?: string };
+  const text = `${err.shortMessage ?? ""} ${err.reason ?? ""} ${err.message}`;
+
+  for (const [name, message] of Object.entries(CONTRACT_ERROR_MESSAGES)) {
+    if (text.includes(name)) {
+      return message;
+    }
+  }
+
+  if (text.includes("insufficient funds")) {
+    return "Relay wallet has insufficient funds for gas.";
+  }
+
+  return err.shortMessage ?? err.message ?? "Mint transaction failed";
+}
 
 export interface MintRequestBody {
   recipient: string;
@@ -104,7 +179,9 @@ export async function getRelayContext(): Promise<RelayContext> {
     relayer
   );
 
-  const onChainRelayer = await contract.relayer();
+  const onChainRelayer = await withRpcRetry("relayer lookup", () =>
+    contract.relayer()
+  );
   if (onChainRelayer.toLowerCase() !== relayer.address.toLowerCase()) {
     throw new Error(
       `Relayer wallet ${relayer.address} does not match contract relayer ${onChainRelayer}`
@@ -183,7 +260,71 @@ export async function processMint(
   }
 
   const { contract } = await getRelayContext();
-  const alreadyClaimed = await contract.claimed(eventIdBytes32, recipient);
+
+  let eventInfo: {
+    exists: boolean;
+    startTime: bigint;
+    endTime: bigint;
+  };
+
+  try {
+    eventInfo = await withRpcRetry("event lookup", () =>
+      contract.events(eventIdBytes32)
+    );
+  } catch (error) {
+    const message = formatRpcError(error);
+    return {
+      status: 503,
+      body: { success: false, error: message },
+    };
+  }
+
+  if (!eventInfo.exists) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        error: CONTRACT_ERROR_MESSAGES.EventNotFound,
+      },
+    };
+  }
+
+  const provider = contract.runner?.provider;
+  if (provider) {
+    try {
+      const latestBlock = await withRpcRetry("latest block lookup", () =>
+        provider.getBlock("latest")
+      );
+      const chainNow = latestBlock?.timestamp ?? Math.floor(Date.now() / 1000);
+      if (chainNow < eventInfo.startTime || chainNow > eventInfo.endTime) {
+        return {
+          status: 400,
+          body: {
+            success: false,
+            error: CONTRACT_ERROR_MESSAGES.EventNotActive,
+          },
+        };
+      }
+    } catch (error) {
+      return {
+        status: 503,
+        body: { success: false, error: formatRpcError(error) },
+      };
+    }
+  }
+
+  let alreadyClaimed: boolean;
+  try {
+    alreadyClaimed = await withRpcRetry("claimed lookup", () =>
+      contract.claimed(eventIdBytes32, recipient)
+    );
+  } catch (error) {
+    return {
+      status: 503,
+      body: { success: false, error: formatRpcError(error) },
+    };
+  }
+
   if (alreadyClaimed) {
     return {
       status: 400,
@@ -194,15 +335,35 @@ export async function processMint(
     };
   }
 
-  const tx = await contract.mintStamp(recipient, eventIdBytes32);
-  const receipt = await tx.wait();
+  try {
+    const tx = await contract.mintStamp(recipient, eventIdBytes32);
+    const receipt = await tx.wait();
 
-  return {
-    status: 200,
-    body: {
-      success: true,
-      txHash: receipt.hash,
-      blockNumber: receipt.blockNumber,
-    },
-  };
+    if (!receipt) {
+      return {
+        status: 500,
+        body: {
+          success: false,
+          error: "Transaction submitted but no receipt received",
+        },
+      };
+    }
+
+    return {
+      status: 200,
+      body: {
+        success: true,
+        txHash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+      },
+    };
+  } catch (error) {
+    const rpcMessage = formatRpcError(error);
+    const isRpcFailure = rpcMessage.includes("RPC is temporarily unavailable");
+    const message = isRpcFailure ? rpcMessage : formatContractError(error);
+    return {
+      status: isRpcFailure ? 503 : 400,
+      body: { success: false, error: message },
+    };
+  }
 }
