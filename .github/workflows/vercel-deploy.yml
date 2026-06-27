@@ -4,9 +4,8 @@ on:
   push:
     branches: [main]
 
-env:
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+permissions:
+  contents: read
 
 jobs:
   deploy:
@@ -16,20 +15,41 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Validate Vercel token
+        run: |
+          if [ -z "${{ secrets.VERCEL_TOKEN }}" ]; then
+            echo "::error::VERCEL_TOKEN secret is missing."
+            echo "Create a token at https://vercel.com/account/tokens"
+            echo "Then add it in GitHub: Settings → Secrets and variables → Actions → New repository secret"
+            exit 1
+          fi
 
       - name: Install Vercel CLI
         run: npm install -g vercel@54
 
       - name: Pull Vercel Environment
         run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: team_YCXU9abGxDdvvI20OsmgQ4PT
+          VERCEL_PROJECT_ID: prj_BEvA9DIwese2pHOBlwcnWWc0iBx0
 
       - name: Build Project
         run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
         env:
+          VERCEL_ORG_ID: team_YCXU9abGxDdvvI20OsmgQ4PT
+          VERCEL_PROJECT_ID: prj_BEvA9DIwese2pHOBlwcnWWc0iBx0
           VITE_CONTRACT_ADDRESS: ${{ secrets.VITE_CONTRACT_ADDRESS }}
           VITE_RELAY_URL: /api
           VITE_RPC_URL: https://testnet-rpc.monad.xyz
 
       - name: Deploy to Vercel
         run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: team_YCXU9abGxDdvvI20OsmgQ4PT
+          VERCEL_PROJECT_ID: prj_BEvA9DIwese2pHOBlwcnWWc0iBx0
