@@ -8,6 +8,6 @@
     "outDir": "dist",
     "declaration": true
   },
-  "include": ["./scripts", "./hardhat.config.ts"],
+  "include": ["./scripts", "./relay", "./hardhat.config.ts"],
   "files": ["./hardhat.config.ts"]
 }
